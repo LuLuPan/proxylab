@@ -1,3 +1,7 @@
+/*
+ * Andrew ID: luningp
+ * Name: Luning Pan
+ */
 #include <stdio.h>
 
 #define MAX_CACHE_SIZE 1049000
