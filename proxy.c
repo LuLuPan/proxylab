@@ -17,7 +17,7 @@ static const char *accept_encoding = "Accept-Encoding: gzip, deflate\r\n";
 static const char *connection = "Connection: close\r\n";
 static const char *proxy_connection = "Proxy-Connection: close\r\n";
 
-#define DEBUG 0
+#define DEBUG  1
 
 #if DEBUG
 #define DEBUG_PRINT(msg) printf("%s", msg)
@@ -39,6 +39,31 @@ int forward_request(rio_t *rio, char *req_buf, int clientfd);
 int forward_response(rio_t *rio_server, char *resp_buf, int connfd);
 
 
+/* parse positive number in the string */
+int parse_num(char *str)
+{
+    char *ptr = NULL;
+    char num[64];
+    char *num_ptr = num;
+    ptr = str;
+    while(((*ptr < '0') || (*ptr > '9')) && (*ptr != '\r'))
+        ptr++;
+    
+    if(*ptr >= '0' && *ptr <= '9')
+    {
+        /*find num*/
+         while(*ptr >= '0' && *ptr <= '9')
+         {
+            *num_ptr = *ptr;
+            num_ptr++;
+            ptr++;
+         }
+
+         return atoi(num);
+    }
+    else
+        return -1;
+}
 
 
 char* find_string(char *buf, char *target)
@@ -124,7 +149,7 @@ int read_request(int connfd, char *req_buf, char *hostname, int *port)
     sscanf(buf, "%s %s %s", method, uri, version);
     /* HTTP1.1 -> HTTP1.0 */
     sprintf(req_buf, "%s %s HTTP/1.0\r\n", method, uri);
-    DEBUG_PRINT(req_buf);
+    //DEBUG_PRINT(req_buf);
     memset(buf, 0, MAXLINE);
     /* Read request header*/
     if(rio_readlineb(&rio, buf, MAXLINE) < 0)
@@ -132,14 +157,14 @@ int read_request(int connfd, char *req_buf, char *hostname, int *port)
         printf("rio_readlineb fail!\n");
         return -1;
     }
-    DEBUG_PRINT(buf);
+    //DEBUG_PRINT(buf);
 
     while(1)
     {
         /* empty line? */
         if(strcmp(buf, "\r\n") == 0)
         {
-            DEBUG_PRINT("Empty line!\n");
+            //DEBUG_PRINT("Empty line!\n");
             break;
         }
         if(find_string(buf, "Host:"))
@@ -147,37 +172,37 @@ int read_request(int connfd, char *req_buf, char *hostname, int *port)
             parse_reqhdr(buf, hostname, port);
             sprintf(req_tmp, "Host: %s\r\n", hostname);
             strcat(req_buf, req_tmp);
-            DEBUG_PRINT(req_buf);
+            //DEBUG_PRINT(req_buf);
         }
         else if(find_string(buf, "User-Agent:"))
         {
             sprintf(req_tmp, "%s", user_agent);
             strcat(req_buf, req_tmp);
-            DEBUG_PRINT(req_buf);
+            //DEBUG_PRINT(req_buf);
         }
         else if(find_string(buf, "Accept:"))
         {
             sprintf(req_tmp, "%s", accept_msg);
             strcat(req_buf, req_tmp);
-            DEBUG_PRINT(req_buf);
+            //DEBUG_PRINT(req_buf);
         }
         else if(find_string(buf, "Accept-Encoding:"))
         {
             sprintf(req_tmp, "%s", accept_encoding);
             strcat(req_buf, req_tmp);
-            DEBUG_PRINT(req_buf);
+            //DEBUG_PRINT(req_buf);
         }
         else if(find_string(buf, "Connection:"))
         {
             sprintf(req_tmp, "%s", connection);
             strcat(req_buf, req_tmp);
-            DEBUG_PRINT(req_buf);
+            //DEBUG_PRINT(req_buf);
         }
         else if(find_string(buf, "Proxy-Connection:"))
         {
             sprintf(req_tmp, "%s", proxy_connection);
             strcat(req_buf, req_tmp);
-            DEBUG_PRINT(req_buf);
+            //DEBUG_PRINT(req_buf);
         }
                 
         memset(buf, 0, sizeof(buf));
@@ -186,7 +211,7 @@ int read_request(int connfd, char *req_buf, char *hostname, int *port)
             fprintf(stderr, "rio_readlineb read request error\n");
             return -1;
         }
-        DEBUG_PRINT(buf);
+        //DEBUG_PRINT(buf);
         
     }
 
@@ -195,6 +220,7 @@ int read_request(int connfd, char *req_buf, char *hostname, int *port)
 
     //request empty line separater
     strcat(req_buf, "\r\n");
+    //DEBUG_PRINT(req_buf);
     return 0;
 }
 
@@ -206,6 +232,7 @@ int forward_request(rio_t *rio, char *req_buf, int clientfd)
     if(rio_writen(clientfd, req_buf, strlen(req_buf)) < 0)
     {
         printf("bufrequest error:%s\n", req_buf);
+        fprintf(stderr, "rio_writen request error\n");
         close(clientfd);    
         return -1;
     }
@@ -216,7 +243,11 @@ int forward_request(rio_t *rio, char *req_buf, int clientfd)
 int forward_response(rio_t *rio_server, char *resp_buf, int connfd)
 {
     char response[MAX_OBJECT_SIZE];
+    char resp_line[MAXLINE];
     int length = 0;
+    int content_len = 0;
+    #if 0
+    /* Send response headers to client */
     while((length = rio_readnb(rio_server, response, strlen(resp_buf))) > 0)
     {
 
@@ -227,10 +258,32 @@ int forward_response(rio_t *rio_server, char *resp_buf, int connfd)
         if(rio_writen(connfd, response, length) < 0)
         {
             printf("rio_writen() error: %s\n", strerror(errno));
+            fprintf(stderr, "rio_writen response error\n");
             return -1;
         }
         
     }
+    #endif
+
+    /*send reponse line and headers to client*/
+    while((length = rio_readlineb(rio_server, resp_line, MAXLINE)) > 0)
+    {
+        strcat(response, resp_line);
+        if(strcmp(resp_line, "\r\n") == 0)
+            break;
+        /* get size of response body from response header: Content-Length */
+        if (strstr(resp_line, "Content-Length: ")) {
+            content_len = parse_num(resp_line);
+            if(content_len < 0)
+            {
+                fprintf(stderr, "Error get Content-Length: %s", resp_line);
+                return -1;
+            }
+            printf("**** content_len: %d\n", content_len);
+        }
+    }
+    
+    /* Send response body to client */
 
     
     return 0;
@@ -252,12 +305,14 @@ int run_proxy(int connfd)
     if((clientfd = Open_clientfd(hostname, port)) < 0)
     {
         printf("Open_clientfd error\n");
+        fprintf(stderr, "Error: connection refused: %s !\n", hostname);
         return -1;
     }
-    
+
     if(forward_request(&rio, req_buf, clientfd) < 0)
     {
         printf("forward_request error\n");
+        fprintf(stderr, "Error: Send request to server failed !\n");
         return -1;
     }
     
@@ -294,6 +349,11 @@ int main(int argc, char **argv)
     }
     port = atoi(argv[1]);
 
+    /* ignore SIGPIPE */
+    Signal(SIGPIPE, SIG_IGN);
+
+
+    /* open proxy listen port */
     listenfd = Open_listenfd(port);
     while (1) {
         clientlen = sizeof(clientaddr);
