@@ -17,9 +17,9 @@ static const char *accept_encoding = "Accept-Encoding: gzip, deflate\r\n";
 static const char *connection = "Connection: close\r\n";
 static const char *proxy_connection = "Proxy-Connection: close\r\n";
 
-#define DEBUG 1
+#define DEBUG 0
 
-#ifdef DEBUG
+#if DEBUG
 #define DEBUG_PRINT(msg) printf("%s", msg)
 #else
 #define DEBUG_PRINT(msg)
@@ -41,7 +41,7 @@ int forward_response(rio_t *rio_server, char *resp_buf, int connfd);
 
 
 
-int find_string(char *buf, char *target)
+char* find_string(char *buf, char *target)
 {
     if(buf == NULL || target == NULL)
         return 0;
@@ -284,12 +284,12 @@ void check_request(PRequest pRequest)
 int main(int argc, char **argv)
 {
     //printf("%s%s%s", user_agent, accept, accept_encoding);
-    int listenfd, connfd, port, clientlen;
+    int listenfd, connfd, port;
     struct sockaddr_in clientaddr;
-
+    socklen_t clientlen;
     /* Check command line args */
     if (argc != 2) {
-        printf(stderr, "proxy usage: %s <port>\n", argv[0]);
+        fprintf(stderr, "proxy usage: %s <port>\n", argv[0]);
         exit(1);
     }
     port = atoi(argv[1]);

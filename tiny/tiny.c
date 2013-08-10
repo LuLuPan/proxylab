@@ -16,12 +16,13 @@ void clienterror(int fd, char *cause, char *errnum,
 
 int main(int argc, char **argv) 
 {
-    int listenfd, connfd, port, clientlen;
+    int listenfd, connfd, port;
     struct sockaddr_in clientaddr;
+    socklen_t clientlen;
 
     /* Check command line args */
     if (argc != 2) {
-        printf(stderr, "usage: %s <port>\n", argv[0]);
+        fprintf(stderr, "usage: %s <port>\n", argv[0]);
         exit(1);
     }
     port = atoi(argv[1]);
@@ -62,26 +63,26 @@ void doit(int fd)
     /* Parse URI from GET request */
     is_static = parse_uri(uri, filename, cgiargs);
     if (stat(filename, &sbuf) < 0) {
-        clienterror(fd, filename, "404", "Not found",
-         "Tiny couldn't find this file");
-        return;
+	clienterror(fd, filename, "404", "Not found",
+		    "Tiny couldn't find this file");
+	return;
     }
 
     if (is_static) { /* Serve static content */
-    if (!(S_ISREG(sbuf.st_mode)) || !(S_IRUSR & sbuf.st_mode)) {
-        clienterror(fd, filename, "403", "Forbidden",
-            "Tiny couldn't read the file");
-            return;
-        }
-        serve_static(fd, filename, sbuf.st_size);
+	if (!(S_ISREG(sbuf.st_mode)) || !(S_IRUSR & sbuf.st_mode)) {
+	    clienterror(fd, filename, "403", "Forbidden",
+			"Tiny couldn't read the file");
+	    return;
+	}
+	serve_static(fd, filename, sbuf.st_size);
     }
     else { /* Serve dynamic content */
-    if (!(S_ISREG(sbuf.st_mode)) || !(S_IXUSR & sbuf.st_mode)) {
-        clienterror(fd, filename, "403", "Forbidden",
-        "Tiny couldn't run the CGI program");
-        return;
-    }
-    serve_dynamic(fd, filename, cgiargs);
+	if (!(S_ISREG(sbuf.st_mode)) || !(S_IXUSR & sbuf.st_mode)) {
+	    clienterror(fd, filename, "403", "Forbidden",
+			"Tiny couldn't run the CGI program");
+	    return;
+	}
+	serve_dynamic(fd, filename, cgiargs);
     }
 }
 /* $end doit */
@@ -97,8 +98,8 @@ void read_requesthdrs(rio_t *rp)
     Rio_readlineb(rp, buf, MAXLINE);
     printf("%s", buf);
     while(strcmp(buf, "\r\n")) {
-        Rio_readlineb(rp, buf, MAXLINE);
-        rintf("%s", buf);
+	Rio_readlineb(rp, buf, MAXLINE);
+	printf("%s", buf);
     }
     return;
 }
@@ -114,24 +115,24 @@ int parse_uri(char *uri, char *filename, char *cgiargs)
     char *ptr;
 
     if (!strstr(uri, "cgi-bin")) {  /* Static content */
-        trcpy(cgiargs, "");
-        trcpy(filename, ".");
-        trcat(filename, uri);
-    if (uri[strlen(uri)-1] == '/')
-        strcat(filename, "home.html");
-        return 1;
+	strcpy(cgiargs, "");
+	strcpy(filename, ".");
+	strcat(filename, uri);
+	if (uri[strlen(uri)-1] == '/')
+	    strcat(filename, "home.html");
+	return 1;
     }
     else {  /* Dynamic content */
-    ptr = index(uri, '?');
-    if (ptr) {
-        strcpy(cgiargs, ptr+1);
-        *ptr = '\0';
-    }
-    else 
-        strcpy(cgiargs, "");
-    trcpy(filename, ".");
-    trcat(filename, uri);
-    return 0;
+	ptr = index(uri, '?');
+	if (ptr) {
+	    strcpy(cgiargs, ptr+1);
+	    *ptr = '\0';
+	}
+	else 
+	    strcpy(cgiargs, "");
+	strcpy(filename, ".");
+	strcat(filename, uri);
+	return 0;
     }
 }
 /* $end parse_uri */
@@ -167,13 +168,13 @@ void serve_static(int fd, char *filename, int filesize)
 void get_filetype(char *filename, char *filetype) 
 {
     if (strstr(filename, ".html"))
-        trcpy(filetype, "text/html");
+	strcpy(filetype, "text/html");
     else if (strstr(filename, ".gif"))
-        trcpy(filetype, "image/gif");
+	strcpy(filetype, "image/gif");
     else if (strstr(filename, ".jpg"))
-        trcpy(filetype, "image/jpeg");
+	strcpy(filetype, "image/jpeg");
     else
-        trcpy(filetype, "text/plain");
+	strcpy(filetype, "text/plain");
 }  
 /* $end serve_static */
 
@@ -192,10 +193,10 @@ void serve_dynamic(int fd, char *filename, char *cgiargs)
     Rio_writen(fd, buf, strlen(buf));
   
     if (Fork() == 0) { /* child */
-    /* Real server would set all CGI vars here */
-        etenv("QUERY_STRING", cgiargs, 1); 
-    Dup2(fd, STDOUT_FILENO);         /* Redirect stdout to client */
-    Execve(filename, emptylist, environ); /* Run CGI program */
+	/* Real server would set all CGI vars here */
+	setenv("QUERY_STRING", cgiargs, 1); 
+	Dup2(fd, STDOUT_FILENO);         /* Redirect stdout to client */
+	Execve(filename, emptylist, environ); /* Run CGI program */
     }
     Wait(NULL); /* Parent waits for and reaps child */
 }
@@ -206,7 +207,7 @@ void serve_dynamic(int fd, char *filename, char *cgiargs)
  */
 /* $begin clienterror */
 void clienterror(int fd, char *cause, char *errnum, 
-         char *shortmsg, char *longmsg) 
+		 char *shortmsg, char *longmsg) 
 {
     char buf[MAXLINE], body[MAXBUF];
 
