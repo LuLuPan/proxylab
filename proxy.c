@@ -17,7 +17,9 @@ static const char *accept_encoding = "Accept-Encoding: gzip, deflate\r\n";
 static const char *connection = "Connection: close\r\n";
 static const char *proxy_connection = "Proxy-Connection: close\r\n";
 
-#define DEBUG  1
+#define MIN(x, y) ((x) > (y) ? (y) : (x))
+
+#define DEBUG 0
 
 #if DEBUG
 #define DEBUG_PRINT(msg) printf("%s", msg)
@@ -122,7 +124,7 @@ int parse_reqhdr(char *buf, char *hostname, int *port)
      }
      else
      {
-        *port = 80;
+        *port = 80;//default port
      }
         
      return 0;
@@ -137,13 +139,15 @@ int read_request(int connfd, char *req_buf, char *hostname, int *port)
     //char filename[MAXLINE], cgiargs[MAXLINE];
     rio_t rio;
     int result = 0;
+    int len = -1;
     //struct Request request;
   
     /* Read request line */
     Rio_readinitb(&rio, connfd);
+    
     if(rio_readlineb(&rio, buf, MAXLINE) < 0)
     {
-        printf("rio_readlineb fail!\n");
+        fprintf(stderr, "rio_readlineb read request error: %s\n", strerror(errno));
         return -1;
     }
     sscanf(buf, "%s %s %s", method, uri, version);
@@ -154,7 +158,7 @@ int read_request(int connfd, char *req_buf, char *hostname, int *port)
     /* Read request header*/
     if(rio_readlineb(&rio, buf, MAXLINE) < 0)
     {
-        printf("rio_readlineb fail!\n");
+        fprintf(stderr, "rio_readlineb read request error: %s\n", strerror(errno));
         return -1;
     }
     //DEBUG_PRINT(buf);
@@ -165,6 +169,7 @@ int read_request(int connfd, char *req_buf, char *hostname, int *port)
         if(strcmp(buf, "\r\n") == 0)
         {
             //DEBUG_PRINT("Empty line!\n");
+
             break;
         }
         if(find_string(buf, "Host:"))
@@ -206,33 +211,41 @@ int read_request(int connfd, char *req_buf, char *hostname, int *port)
         }
                 
         memset(buf, 0, sizeof(buf));
-        if(rio_readlineb(&rio, buf, MAXLINE) < 0)
+        
+        if((len = rio_readlineb(&rio, buf, MAXLINE)) < 0)
         {
-            fprintf(stderr, "rio_readlineb read request error\n");
+            fprintf(stderr, "rio_readlineb read request error: %s\n", strerror(errno));
             return -1;
         }
+        if(len == 0)
+            break;
         //DEBUG_PRINT(buf);
         
     }
 
     //Todo: if without above request details, always send them here
 
-
-    //request empty line separater
+    /* request empty line separater */
     strcat(req_buf, "\r\n");
+
     //DEBUG_PRINT(req_buf);
     return 0;
 }
 
 int forward_request(rio_t *rio, char *req_buf, int clientfd)
 {
-    rio_readinitb(rio, clientfd);
-
+    Rio_readinitb(rio, clientfd);
+#if DEBUG    
+    printf("forward_request: %d\n", clientfd);
+    printf("===========================\n");
+    printf("%s", req_buf);
+    printf("===========================\ns");
+#endif
     /* send req msg to server*/
     if(rio_writen(clientfd, req_buf, strlen(req_buf)) < 0)
     {
         printf("bufrequest error:%s\n", req_buf);
-        fprintf(stderr, "rio_writen request error\n");
+        fprintf(stderr, "rio_writen request error: %s\n", strerror(errno));
         close(clientfd);    
         return -1;
     }
@@ -240,51 +253,99 @@ int forward_request(rio_t *rio, char *req_buf, int clientfd)
     return 0;
 }
 
+char test[128] = " \
+    <html> \
+    <head><title>test</title></head> \
+    <body> \
+    Proxy Lab Test:)  \
+    </body>   \
+    </html>   \
+    ";
+
+/*forward response (lines/headers/body) to client*/
 int forward_response(rio_t *rio_server, char *resp_buf, int connfd)
 {
     char response[MAX_OBJECT_SIZE];
+    char resp_body[MAX_OBJECT_SIZE];
     char resp_line[MAXLINE];
     int length = 0;
-    int content_len = 0;
-    #if 0
-    /* Send response headers to client */
-    while((length = rio_readnb(rio_server, response, strlen(resp_buf))) > 0)
-    {
-
-        DEBUG_PRINT(response);
-         //Todo: cache response here
-         
-        /* send response to client*/
-        if(rio_writen(connfd, response, length) < 0)
-        {
-            printf("rio_writen() error: %s\n", strerror(errno));
-            fprintf(stderr, "rio_writen response error\n");
-            return -1;
-        }
-        
-    }
-    #endif
+    int body_size = 0;
+    int content_len = -1;
+    int cont_size = 0;
 
     /*send reponse line and headers to client*/
     while((length = rio_readlineb(rio_server, resp_line, MAXLINE)) > 0)
     {
         strcat(response, resp_line);
+        /* send headers to clinet*/
+        if (rio_writen(connfd, resp_line, length) < 0) {
+            fprintf(stderr, "Error: rio_writen() in forward_response header:  %s\n", strerror(errno));  
+            DEBUG_PRINT("Error: rio_writen() in forward_response header\n");
+            /*write EPIPE error*/
+            if(errno == EPIPE)
+                continue;
+        }
+        
+        /*empty line between headers and body*/
         if(strcmp(resp_line, "\r\n") == 0)
             break;
+        
         /* get size of response body from response header: Content-Length */
         if (strstr(resp_line, "Content-Length: ")) {
             content_len = parse_num(resp_line);
             if(content_len < 0)
             {
                 fprintf(stderr, "Error get Content-Length: %s", resp_line);
+                DEBUG_PRINT("Error get Content-Length\n");
+                close(connfd);
                 return -1;
             }
-            printf("**** content_len: %d\n", content_len);
         }
+
+        memset(resp_line, 0, sizeof(resp_line));
     }
+
+    /* Todo: error of read from closed socke */
+    if(errno == ECONNRESET)
+        printf("ECONNRESET after response header");
+
+
+    /*w/o content length in response headers*/
+    if(content_len == -1)
+        content_len = MAX_OBJECT_SIZE;
+    
+    cont_size = MIN(content_len, MAX_OBJECT_SIZE);
     
     /* Send response body to client */
+#if DEBUG
+    /* send fake response body */
+    Rio_writen(connfd, test, strlen(test));
+#else
 
+    while((length = rio_readnb(rio_server, resp_body, cont_size)) > 0)
+    {
+        if (rio_writen(connfd, resp_body, length) < 0) {
+            fprintf(stderr, "rio_writen in forward_response body error: %s!", strerror(errno));
+            DEBUG_PRINT("rio_writen in forward_response body error!");  
+            /*write EPIPE error*/
+            if(errno == EPIPE)
+                continue;
+        }
+        body_size += length;
+    }
+
+    /* Todo: error of read from closed socke */
+    if(errno == ECONNRESET)
+        printf("ECONNRESET after response body");
+#endif
+
+#if 0
+    srcfd = Open(filename, O_RDONLY, 0);
+    srcp = Mmap(0, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0);
+    Close(srcfd);
+    Rio_writen(fd, srcp, filesize);
+    Munmap(srcp, filesize);
+#endif
     
     return 0;
 }
@@ -294,13 +355,14 @@ int run_proxy(int connfd)
     char hostname[MAXLINE];
     char req_buf[MAX_OBJECT_SIZE];
     char resp_buf[MAX_OBJECT_SIZE];
-    int port = 0;
+    int port = 80;
     int clientfd;
     rio_t rio;
 
     /* read request */
     if(read_request(connfd, req_buf, hostname, &port) < 0)
         return -1;
+    
     /* open connection to server */
     if((clientfd = Open_clientfd(hostname, port)) < 0)
     {
@@ -308,7 +370,7 @@ int run_proxy(int connfd)
         fprintf(stderr, "Error: connection refused: %s !\n", hostname);
         return -1;
     }
-
+    //printf("Host: %s, port: %d\n", hostname, port);
     if(forward_request(&rio, req_buf, clientfd) < 0)
     {
         printf("forward_request error\n");
@@ -349,7 +411,7 @@ int main(int argc, char **argv)
     }
     port = atoi(argv[1]);
 
-    /* ignore SIGPIPE */
+    /* ignore SIGPIPE to ignore broken error*/
     Signal(SIGPIPE, SIG_IGN);
 
 

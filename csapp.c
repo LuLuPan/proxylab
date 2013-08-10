@@ -587,16 +587,17 @@ static ssize_t rio_read(rio_t *rp, char *usrbuf, size_t n)
     int cnt;
 
     while (rp->rio_cnt <= 0) {  /* refill if buf is empty */
-	rp->rio_cnt = read(rp->rio_fd, rp->rio_buf, 
+        //printf("fd: %d, cnt: %d, size: %d\n", rp->rio_fd, rp->rio_cnt, n);
+	    rp->rio_cnt = read(rp->rio_fd, rp->rio_buf, 
 			   sizeof(rp->rio_buf));
-	if (rp->rio_cnt < 0) {
-	    if (errno != EINTR) /* interrupted by sig handler return */
-		return -1;
-	}
-	else if (rp->rio_cnt == 0)  /* EOF */
-	    return 0;
-	else 
-	    rp->rio_bufptr = rp->rio_buf; /* reset buffer ptr */
+	    if (rp->rio_cnt < 0) {
+	        if (errno != EINTR) /* interrupted by sig handler return */
+		    return -1;
+	    }
+	    else if (rp->rio_cnt == 0)  /* EOF */
+	        return 0;
+	    else 
+	        rp->rio_bufptr = rp->rio_buf; /* reset buffer ptr */
     }
 
     /* Copy min(n, rp->rio_cnt) bytes from internal buf to user buf */
