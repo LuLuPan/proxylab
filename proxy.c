@@ -22,6 +22,8 @@
 #define DEBUG_PRINT(msg)
 #endif
 
+#define SET_NUM     1   //sets number
+#define SET_ENTRY   ((MAX_CACHE_SIZE / MAX_OBJECT_SIZE) / SET_NUM) //cache lines
 
 static const char *user_agent = "User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:10.0.3) Gecko/20120305 Firefox/10.0.3\r\n";
 static const char *accept_msg = "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n";
@@ -35,6 +37,42 @@ sem_t mutex_q;
 
 /*dynamic fd task queue*/
 int fd_q[8];
+
+/*simple tester to verify connection*/
+char test[128] = " \
+    <html> \
+    <head><title>test</title></head> \
+    <body> \
+    Proxy Lab Test:)  \
+    </body>   \
+    </html>   \
+    ";
+
+
+typedef struct _CACHE_LINE CACHE_LINE, *PCACHE_LINE;
+struct _CACHE_LINE
+{
+    int in_use;
+    char tag[MAXLINE];
+    char block[MAX_OBJECT_SIZE];
+    PCACHE_LINE pNext;
+};
+
+PCACHE_LINE pCacheHeader = NULL;
+PCACHE_LINE pCacheCurr = NULL;
+
+
+/*unitility functions declaration*/
+int read_request(int connfd, char *req_buf, char *hostname, int *port);
+int forward_request(rio_t *rio, char *req_buf, int clientfd);
+int forward_response(rio_t *rio_server, char *resp_buf, int connfd);
+void *proxy_thread(void *argp);
+int run_proxy(int connfd);
+int is_valid_fd(int fd);
+pid_t gettid();
+int parse_num(char *str);
+char* find_string(char *buf, char *target);
+int parse_reqhdr(char *buf, char *hostname, int *port);
 
 
 int insert_fd_q(int fd)
@@ -69,30 +107,53 @@ int pop_fd_q()
     return -1;
 }
 
+int init_cache()
+{
+    PCACHE_LINE pCache = NULL;
+    PCACHE_LINE pCachePrev = NULL;
+    int i, j; 
+    for(i = 0; i < SET_NUM; i++)
+    {
+        for(j = 0; j < SET_ENTRY; j++)
+        {
+            pCache = malloc(sizeof(CACHE_LINE));
+            memset(pCache, 0, sizeof(CACHE_LINE));
+            pCache->in_use = 0;
+            pCache->pNext = NULL;
+            if(i == 0 && j == 0) {
+                pCacheHeader = pCache;
+            }
+            else {
+                pCachePrev->pNext = pCache;
+            }
+            
+            pCachePrev = pCache;
+        }
+        
+    }
+    
+    return 0;
+}
 
-/*simple tester to verify connection*/
-char test[128] = " \
-    <html> \
-    <head><title>test</title></head> \
-    <body> \
-    Proxy Lab Test:)  \
-    </body>   \
-    </html>   \
-    ";
 
-/*unitility functions declaration*/
-int read_request(int connfd, char *req_buf, char *hostname, int *port);
-int forward_request(rio_t *rio, char *req_buf, int clientfd);
-int forward_response(rio_t *rio_server, char *resp_buf, int connfd);
-void *proxy_thread(void *argp);
-int run_proxy(int connfd);
-int is_valid_fd(int fd);
-pid_t gettid();
-int parse_num(char *str);
-char* find_string(char *buf, char *target);
-int parse_reqhdr(char *buf, char *hostname, int *port);
-
-
+int deinit_cache()
+{
+    int i, j;
+    PCACHE_LINE cache = pCacheHeader;
+    PCACHE_LINE pCacheNext = NULL;
+    
+    for(i = 0; i < SET_NUM; i++)
+    {
+        for(j = 0; j < SET_ENTRY; j++)
+        {
+            pCacheNext = cache->pNext;
+            free(cache);
+            cache = pCacheNext;
+        }   
+    }
+    
+    return 0;
+}
 
 int main(int argc, char **argv)
 {
@@ -109,10 +170,8 @@ int main(int argc, char **argv)
     if (err != 0)
         fprintf(stderr, "pthread_mutex_init failed: %s\n", strerror(err));
     
-    sem_init(&mutex, 0, 1);
-    sem_init(&mutex_q, 0 , 1);
-
-
+    Sem_init(&mutex, 0, 1);
+    Sem_init(&mutex_q, 0 , 1);
     
     /* Check command line args */
     if (argc != 2) {
@@ -120,6 +179,8 @@ int main(int argc, char **argv)
         exit(1);
     }
     port = atoi(argv[1]);
+
+    init_cache();
 
     /* ignore SIGPIPE to ignore broken error*/
     Signal(SIGPIPE, SIG_IGN);
@@ -145,6 +206,7 @@ int main(int argc, char **argv)
 
     Close(listenfd);
 
+    deinit_cache();
     /*destroy mutex*/
     sem_destroy(&mutex);
     sem_destroy(&mutex_q);
@@ -469,8 +531,8 @@ int forward_response(rio_t *rio_server, char *resp_buf, int connfd)
     return 0;
 }
 
-/* modify open_clientfd with mutex to avoid concurrent racing */
-int open_clientfd_mutex(char *hostname, int port)
+/* Thread-Safe: modify open_clientfd with mutex to avoid concurrent racing */
+int open_clientfd_r(char *hostname, int port)
 {
 	int clientfd;
 	struct hostent *hp;
@@ -517,7 +579,7 @@ int run_proxy(int connfd)
     }
 
     /* open connection to server */
-    if((clientfd = open_clientfd_mutex(hostname, port)) < 0)
+    if((clientfd = open_clientfd_r(hostname, port)) < 0)
     {
         //printf("connfd: %d, clientfd: %d, host: %s, tid: %d\n", connfd, clientfd, hostname, gettid());
         printf("Open_clientfd error\n");
@@ -554,7 +616,7 @@ int run_proxy(int connfd)
 void *proxy_thread(void *argp)
 {
     int connfd; 
-    pthread_detach(pthread_self());
+    Pthread_detach(pthread_self());
     connfd = pop_fd_q();
     //printf("### proxy_thread: %d, tid: %d\n", connfd, gettid());
     run_proxy(connfd);
